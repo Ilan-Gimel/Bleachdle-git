@@ -3,6 +3,9 @@
 -- Host: localhost    Database: Bleach_DB
 -- ------------------------------------------------------
 -- Server version	9.1.0
+CREATE DATABASE IF NOT EXISTS `Bleach_DB`;
+USE `Bleach_DB`;
+
 
 /*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
 /*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;

@@ -1,83 +1,94 @@
-import mysql.connector
-import random
-from flask import Flask, jsonify
-from datetime import datetime
 import os
+import mysql.connector
+from flask import Flask, jsonify
 import urllib.parse
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.interval import IntervalTrigger
+from datetime import datetime, timedelta
+import pytz  
 
-# MySQL connection setup using remote database URL from an environment variable
+# Initialize Flask app
+app = Flask(__name__)
+
+# Function to create a connection to the Cloud SQL database
 def create_connection():
-    db_url = os.getenv("DATABASE_URL")  # Get the remote DB URL from the environment variable
+    # Get the database URL from environment variables
+    db_url = os.getenv("DATABASE_URL")
     
     if db_url:
-        # Parse the database URL
+        # Parse the database URL to get credentials and database name
         url = urllib.parse.urlparse(db_url)
         
-        # Return the MySQL connection using the parsed components
-        return mysql.connector.connect(
-            host=url.hostname,           # Hostname from the URL
-            user=url.username,           # Username from the URL
-            password=url.password,       # Password from the URL
-            database=url.path[1:]        # Database name from the URL (skip the leading '/')
+        # Connect to MySQL using the public IP
+        connection = mysql.connector.connect(
+            user=url.username,
+            password=url.password,
+            host=url.hostname,  # Use the public IP directly from the parsed URL
+            database=url.path[1:]  # Skip the leading '/' in the path
         )
+        
+        return connection
     else:
         raise Exception("DATABASE_URL environment variable not set")
 
-# Create Flask app
-app = Flask(__name__)
-
-# Variable to store the current character
+# Initialize a global variable for current character
 current_character = None
-
-# Set the target time for the refresh (e.g., 12:00 PM)
-TARGET_HOUR = 20
-TARGET_MINUTE = 0
-TARGET_SECOND = 0
 
 # Function to get a random character from the database
 def get_random_character():
-    # Connect to the remote database
+    # Connect to the Cloud SQL database
     connection = create_connection()
     cursor = connection.cursor(dictionary=True)
     
-    # Query the database for all characters
-    cursor.execute("SELECT * FROM bleach_characters")  # Replace 'bleach_characters' with your table name
-    characters = cursor.fetchall()
+    # Fetch a random character directly from the database
+    cursor.execute("SELECT * FROM bleach_characters ORDER BY RAND() LIMIT 1")
+    random_character = cursor.fetchone()  # Fetch one row (random character)
     
-    # Close the connection
     cursor.close()
     connection.close()
     
-    # Pick a random character from the list
-    random_character = random.choice(characters) if characters else None
-    
-    return random_character
+    return random_character  # Will return None if no character is found
 
-# Function to check if it's time to refresh (check if current time matches the target)
-def is_refresh_time():
-    current_time = datetime.now()  # Get the current time
-    
-    # Check if the current time matches the target time (e.g., 12:00 PM)
-    if (current_time.hour == TARGET_HOUR and 
-        current_time.minute == TARGET_MINUTE and 
-        current_time.second == TARGET_SECOND):
-        return True
-    return False
+# Function to update the character
+def update_character():
+    global current_character
+    current_character = get_random_character()  # Get new character from DB
 
-# Initialize the current character
-current_character = get_random_character()
+# Function to get the next midnight (00:00)
+def next_midnight():
+    now = datetime.now(pytz.UTC)  # Ensure we are using UTC timezone
+    # Set the next midnight
+    next_midnight_time = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    return next_midnight_time
+
+# Function to refresh the character every day at midnight (task will run in the background)
+def schedule_refresh():
+    scheduler = BackgroundScheduler(timezone=pytz.UTC)  # Ensure timezone is set to pytz.UTC
+    # Get the first refresh time at the next midnight
+    first_run_time = next_midnight()
+    # Schedule the refresh at midnight every day
+    scheduler.add_job(update_character, trigger=IntervalTrigger(days=1, start_date=first_run_time))
+    scheduler.start()
+
+# Set the initial character when the app starts
+update_character()
 
 # Endpoint to get a random character
 @app.route('/', methods=['GET'])
 def random_character():
     global current_character
-    
-    # If it's time to refresh (at the specific time), get a new character
-    if is_refresh_time():
-        current_character = get_random_character()
-    
-    # Return the current character as a JSON response
-    return jsonify(current_character)
 
+    # Ensure that current_character is not None before returning it
+    if current_character:
+        return jsonify(current_character)
+    else:
+        return jsonify({"error": "No character available"}), 500
+
+# Start the background task for automatic refresh at midnight every day
+schedule_refresh()
+
+# Ensuring the app runs on Google App Engine using the default host and port
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=False, host='0.0.0.0', port=8080)
+
+
